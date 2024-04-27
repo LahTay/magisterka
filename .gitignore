@@ -1,0 +1,5 @@
+./datasets/datasets/*
+./model/logs/*
+./model/saved_model/*
+**/__pycache__/
+**/.idea/
