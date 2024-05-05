@@ -1,10 +1,9 @@
-from __future__ import print_function
-
 import csv
 
 import os
 import os.path
 import pickle
+import shutil
 
 from intervaltree import IntervalTree
 from scipy.io import wavfile
@@ -18,32 +17,22 @@ class MusicNet:
             otherwise from ``test_data``.
         preprocess (bool, optional): If true, preprocesses the dataset to a necessary form
             puts it in root directory. Should be done once and at first run of the class.
-        normalize (bool, optional): If true, rescale input vectors to unit norm.
-        window (int, optional): Size in samples of a data point.
     """
 
     """
+    BEFORE USING - you have to merge your train and test data into 2 folders (data and labels)
     Main usage:
     Set up the root folder, train and preprocess variables.
     Then call the instance to receive data and labels.
     """
 
-    def __init__(self, root, train=True, preprocess=False,
-                 normalize=True, window=16384):
-
-        self.normalize = normalize
-        self.window = window
-        self.m = 128
-        self.train = train
-
+    def __init__(self, root, preprocess=False):
         self.root = os.path.expanduser(root)
 
-        self.train_data = 'train_data'
-        self.train_labels = 'train_labels'
-        self.train_tree = 'train_tree.pckl'
-        self.test_data = 'test_data'
-        self.test_labels = 'test_labels'
-        self.test_tree = 'test_tree.pckl'
+        self.data_folder = 'data'
+        self.labels_folder = "labels"
+        self.tree_file1 = "train_tree.pckl"
+        self.tree_file2 = "test_tree.pckl"
 
         if preprocess:
             self.preprocess()
@@ -51,17 +40,19 @@ class MusicNet:
         if not self._check_exists():
             raise RuntimeError(f'Dataset not found in {self.root}.\n Run the class with preprocessing flag on.')
 
-        if train:
-            self.data_path = os.path.join(self.root, self.train_data)
-            labels_path = os.path.join(self.root, self.train_labels, self.train_tree)
-        else:
-            self.data_path = os.path.join(self.root, self.test_data)
-            labels_path = os.path.join(self.root, self.test_labels, self.test_tree)
+        self.data_path = os.path.join(self.root, self.data_folder)
+        labels_path = os.path.join(self.root, self.labels_folder, self.tree_file1)
+        labels_path2 = os.path.join(self.root, self.labels_folder, self.tree_file2)
 
-        print(f"Reading label pickle of {'training' if self.train else 'testing'} data...")
+        print(f"Reading label pickle data...")
 
         with open(labels_path, 'rb') as f:
             self.labels = pickle.load(f)
+
+
+        with open(labels_path2, 'rb') as f:
+            labels2 = pickle.load(f)
+        self.labels.update(labels2)
 
         self.rec_ids = list(self.labels.keys())
         self.data_files = [os.path.join(self.data_path, f"{rec_id}.wav") for rec_id in self.rec_ids]
@@ -76,13 +67,10 @@ class MusicNet:
         return self.get_names_list(), self.get_labels_obj()
 
     def _check_exists(self):
-        train_data_exist = os.path.exists(os.path.join(self.root, self.train_data))
-        test_data_exist = os.path.exists(os.path.join(self.root, self.test_data))
-        train_labels_exist = os.path.exists(os.path.join(self.root, self.train_labels))
-        test_labels_exist = os.path.exists(os.path.join(self.root, self.test_labels))
+        train_data_exist = os.path.exists(os.path.join(self.root, self.data_folder))
+        test_data_exist = os.path.exists(os.path.join(self.root, self.labels_folder))
 
-        return (train_data_exist and test_data_exist and
-                train_labels_exist and test_labels_exist)
+        return train_data_exist and test_data_exist
 
     def preprocess(self):
         """

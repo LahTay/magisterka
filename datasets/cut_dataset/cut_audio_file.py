@@ -138,11 +138,8 @@ def main_audio_cutter(root_directory, cut_files_folder_name, segment_length, ove
     """
 
 
-    train_data, train_labels = MusicNet(root_directory, train=True)()
-    test_data, test_labels = MusicNet(root_directory, train=False)()
+    data, labels = MusicNet(root_directory)()
 
-    train_data_path = Path(root_directory).absolute() / "train_data" / cut_files_folder_name
-    test_data_path = Path(root_directory).absolute() / "test_data" / cut_files_folder_name
+    data_path = Path(root_directory).absolute() / cut_files_folder_name
 
-    cut_audio_and_save(train_data, train_labels, train_data_path, segment_length, overlap_length, sr_base)
-    cut_audio_and_save(test_data, test_labels, test_data_path, segment_length, overlap_length, sr_base)
+    cut_audio_and_save(data, labels, data_path, segment_length, overlap_length, sr_base)

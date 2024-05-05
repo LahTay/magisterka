@@ -1,47 +1,41 @@
 import numpy as np
 import os
-import tensorflow as tf
-from tensorflow.keras.models import load_model
+
 import pathlib
 from generator import AudioGenerator
 from misc.instrument_number_map import instruments_map
 from sklearn.preprocessing import MultiLabelBinarizer
 
-from cut_dataset.load_cut_files import load_cut_files
-from cut_dataset.cut_audio_file import main_audio_cutter
-from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard
-from model.create_models.conv_model import create_conv_model_from_paper, MultiOutputAccuracy
+from datasets.cut_dataset.load_cut_files import load_cut_files
+from datasets.cut_dataset.cut_audio_file import main_audio_cutter
+
+from model.conv_model.model_predict import predict_model
+from training.train_conv import TrainConvModel
+from training.train_MIC import TrainMICModel, MICType
+from testing.test_conv import TestConvModel
+from testing.test_MIC import TestMICModel
 
 import datetime
 from matplotlib import pyplot as plt
 
-"""
-What to have before presentation 13.02
-
-1. Learn how to work with musicnet dataset.
-a) Know how to extract data from the files
-b) Create functions that will do that
-c) Have a train and test datasets saved in shape of:
-- x: raw audio file
-- y: list of instruments used in that file
-d) The same as above but y is a list of instruments used and timestamps of times when they are used
-2. Create a simple network with the context of understanding instruments.
-2.5 Add tensorboard
-3. Copy the cnn network that was created in Maciek's paper.
-4. Explore other datasets, change them to x and y and incorporate into the networks, check which ones work better alone.
-5. After checking just audio and labels check if any other metadata could be used.
-
-
-So the model has 4 phases of progress:
-a) Be able to tell whether the following instrument exists in the audio.
-b) List what instruments are in the audio based on the labels it knows.
-c) Return a list of timestamps where the given instrument is playing.
-d) Return a list of timestamps where all the instruments found are playing.
 
 """
+TODO:
+MusicNet is not 100% automated. If you download the data and unpack the tar.gz file using the class you need to merge
+the train and test folders together by hand.
 
 
-"""
+Wskaźniki:
+
+    Micro-averaging – sklearn.metrics.f1_score(average=’micro’),
+    Macro-averaging – sklearn.metrics.f1_score(average=’macro’),
+    Hamming-Loss – sklearn.metrics.hamming_loss
+    Jaccard similarity coefficient – sklearn.metrics.jaccard_similarity_score
+    AUC – sklearn.metrics.roc_auc_score
+    Exact Match Ratio – sklearn.metrics.accuracy_score
+
+
+
 Musicnet:
 PCM-encoded
 
@@ -86,34 +80,6 @@ def extract_instruments(data, return_dict=False):
 
     return instrument_dict
 
-
-def create_example_model(input_shape, num_classes):
-    model = tf.keras.Sequential([
-        tf.keras.layers.LSTM(64, return_sequences=True, input_shape=input_shape),
-        tf.keras.layers.LSTM(32),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dense(32, activation='relu'),
-        tf.keras.layers.Dense(num_classes, activation='sigmoid')
-    ])
-    return model
-
-class BatchLogger(tf.keras.callbacks.Callback):
-    def __init__(self, log_every_n_batches=100, logdir="./logs/batch"):
-        super(BatchLogger, self).__init__()
-        self.log_every_n_batches = log_every_n_batches
-        self.logdir = logdir
-        self.writer = tf.summary.create_file_writer(logdir)
-
-    def on_batch_end(self, batch, logs=None):
-        if batch % self.log_every_n_batches == 0:
-            with self.writer.as_default():
-                for name, value in logs.items():
-                    tf.summary.scalar(name, value, step=batch)
-                self.writer.flush()
-
-
 def file_cutter(root_path):
     segment_length = 4
     overlap_length = 0
@@ -122,57 +88,11 @@ def file_cutter(root_path):
 
 
 def file_loader(root_path, cut_files_folder_name):
-    train_data_path = pathlib.Path(root_path).absolute() / "train_data"
-    test_data_path = pathlib.Path(root_path).absolute() / "test_data"
+    filenames_train, labels_train = load_cut_files(pathlib.Path(root_path).absolute() / cut_files_folder_name)
 
-    filenames_train, labels_train = load_cut_files(train_data_path / cut_files_folder_name)
-    filenames_test, labels_test = load_cut_files(test_data_path / cut_files_folder_name)
-
-    return filenames_train, labels_train, filenames_test, labels_test
+    return filenames_train, labels_train
 
 
-from sklearn.metrics import classification_report, multilabel_confusion_matrix, ConfusionMatrixDisplay
-
-def predict_model(model, testing_generator, true_labels, label_binarizer):
-    # Predict probabilities on the test set
-    predicted_probs = model.predict(testing_generator, steps=len(testing_generator))
-
-    # Convert probabilities to binary predictions using a threshold
-    predicted_labels = (predicted_probs > 0.5).astype(int)
-
-    class_names = [str(label) for label in label_binarizer.classes_]
-    # Print a classification report
-    print(classification_report(true_labels, predicted_labels, target_names=class_names))
-
-    # Calculate ROC-AUC for each class
-
-    # roc_auc_scores = roc_auc_score(true_labels, predicted_probs, average=None)  # average=None for per-class scores
-    #
-    # # Print ROC-AUC scores
-    # for i, class_name in enumerate(label_binarizer.classes_):
-    #     print(f"ROC-AUC for class {class_name}: {roc_auc_scores[i]}")
-
-    # Confusion matrices for each class
-    confusion_matrices = multilabel_confusion_matrix(true_labels, predicted_labels)
-    for i, class_name in enumerate(label_binarizer.classes_):
-        print(f"Confusion matrix for class {class_name}:")
-        print(confusion_matrices[i])
-
-    num_classes = confusion_matrices.shape[0]
-
-    # Setting up the figure, subplots
-    fig, axes = plt.subplots(nrows=int(np.ceil(num_classes / 3)), ncols=3, figsize=(15, num_classes * 2))
-    axes = axes.flatten()  # Flatten to 1D array for easy iteration
-
-    # Loop through all classes and plot the confusion matrix for each
-    for i in range(num_classes):
-        disp = ConfusionMatrixDisplay(confusion_matrix=confusion_matrices[i], display_labels=["Absent", "Present"])
-        disp.plot(ax=axes[i], cmap='Blues', values_format='d', colorbar=False)
-        axes[i].title.set_text(f'Class: {label_binarizer.classes_[i]}')
-
-    # Adjust layout
-    plt.tight_layout()
-    plt.show()
 
 
 def transform_labels_to_names(labels, instruments_map):
@@ -183,75 +103,113 @@ def transform_labels_to_names(labels, instruments_map):
     return transformed_labels
 
 
+from datasets.data_loaders.data_splitter import split_data
+
+
 def main():
     # Uncomment if you want to run model on cpu
     # os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
     cutting_files = False
 
-    root_path = "./datasets/musicnet"
+    root_path = "./datasets/datasets/musicnet"
     cut_files_folder_name = "4s_len.0s_overlap"
 
     if cutting_files:
         file_cutter(root_path)
         return
-
-    filenames, labels, filenames_test, labels_test = file_loader(root_path, cut_files_folder_name)
-
-    labels_named = transform_labels_to_names(labels, instruments_map)
-    labels_named_test = transform_labels_to_names(labels_test, instruments_map)
-
-    # filenames, labels = load_cut_files(train_data_path / cut_files_folder_name)
-    # filenames_test, labels_test = load_cut_files(test_data_path / cut_files_folder_name)
-
+    dataset_path = os.path.join(root_path, cut_files_folder_name)
+    filenames, labels = file_loader(root_path, cut_files_folder_name)
     mlb = MultiLabelBinarizer()
-    instruments_transformed = mlb.fit_transform(labels_named)
-    num_outputs = instruments_transformed.shape[1]
 
-    generator = AudioGenerator(np.array(filenames), instruments_transformed, 32, use_mfcc=True)
+    x_train, y_train, x_val, y_val, x_test, y_test = split_data(filenames, labels, mlb, 0.1, 0.1)
 
     load_from_checkpoint = False
-    if load_from_checkpoint:
-        model_path = "model/saved_model/20240424-05313650.h5"
-        model = load_model(model_path,
-                           custom_objects={'MultiOutputAccuracy': MultiOutputAccuracy(num_outputs=num_outputs)})
-    else:
 
-        model = create_conv_model_from_paper((*generator.data_shape_mfcc, 1), num_outputs, mlb.classes_)
-        model.summary()
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    def return_dirs(log_base, model_base, extension):
+        log_dir = os.path.join(log_base, extension, current_time)
+        os.makedirs(log_dir, exist_ok=True)
+        model_base = os.path.join(model_base, extension, "_")
+        return log_dir, model_base
+    model_path = ""
+    # log_dir_ECA, model_dir_ECA = return_dirs("./model/logs/", "./model/saved_model/", "ECA")
+    # log_dir_SGE, model_dir_SGE = return_dirs("./model/logs/", "./model/saved_model/", "SGE")
+    # log_dir_TFQ, model_dir_TFQ = return_dirs("./model/logs/", "./model/saved_model/", "TFQ")
+    # log_dir_None, model_dir_None = return_dirs("./model/logs/", "./model/saved_model/", "None")
+    log_dir_Conv, model_dir_Conv = return_dirs("./model/logs/", "./model/saved_model/", "Conv")
 
-        model_checkpoint_callback = ModelCheckpoint(
-            filepath='./model/saved_model/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + '{epoch:02d}.h5',
-            save_weights_only=False,
-            save_best_only=False,
-            verbose=1)
+    epoch_num = 200
+    multi_label = False
 
-        log_dir = "./model/logs/fit/" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1, update_freq=50)
+    # generator = AudioGenerator(x_train, y_train, 32, use_mfcc=True, multi_label=multi_label,
+    #                            classes_names=mlb.classes_, testing=False)
+    # val_generator = AudioGenerator(x_val, y_val, 32, use_mfcc=True, multi_label=multi_label,
+    #                                classes_names=mlb.classes_, testing=True)
+    # testing_generator = AudioGenerator(x_test, y_test, 32, use_mfcc=True, multi_label=multi_label,
+    #                                    classes_names=mlb.classes_, testing=True)
+    # model = TrainMICModel(MICType.SGE, generator, val_generator, log_dir_SGE, model_dir_SGE, mlb.classes_, model_path)(
+    #     epoch_num)
+    # TestMICModel(model, testing_generator, mlb.classes_, log_dir=log_dir_SGE)()
 
-        model.compile(optimizer='adam',
-                      loss='binary_crossentropy',
-                      metrics=MultiOutputAccuracy(num_outputs=num_outputs))
+    # generator = AudioGenerator(x_train, y_train, 32, use_mfcc=True, multi_label=multi_label,
+    #                            classes_names=mlb.classes_, testing=False)
+    # val_generator = AudioGenerator(x_val, y_val, 32, use_mfcc=True, multi_label=multi_label,
+    #                                classes_names=mlb.classes_, testing=True)
+    # testing_generator = AudioGenerator(x_test, y_test, 32, use_mfcc=True, multi_label=multi_label,
+    #                                    classes_names=mlb.classes_, testing=True)
+    #
+    #
+    # model = TrainMICModel(MICType.ECA, generator, val_generator, log_dir_ECA, model_dir_ECA, mlb.classes_, model_path)(
+    #     epoch_num)
+    # TestMICModel(model, testing_generator, mlb.classes_, log_dir=log_dir_ECA)()
+    #
+    #
+    # generator = AudioGenerator(x_train, y_train, 32, use_mfcc=True, multi_label=multi_label,
+    #                            classes_names=mlb.classes_, testing=False)
+    # val_generator = AudioGenerator(x_val, y_val, 32, use_mfcc=True, multi_label=multi_label,
+    #                                classes_names=mlb.classes_, testing=True)
+    # testing_generator = AudioGenerator(x_test, y_test, 32, use_mfcc=True, multi_label=multi_label,
+    #                                    classes_names=mlb.classes_, testing=True)
+    #
+    # model = TrainMICModel(MICType.SGE, generator, val_generator, log_dir_SGE, model_dir_SGE, mlb.classes_, model_path)(
+    #    epoch_num)
+    # TestMICModel(model, testing_generator, mlb.classes_, log_dir=log_dir_SGE)()
+    #
+    # generator = AudioGenerator(x_train, y_train, 32, use_mfcc=True, multi_label=multi_label,
+    #                            classes_names=mlb.classes_, testing=False)
+    # val_generator = AudioGenerator(x_val, y_val, 32, use_mfcc=True, multi_label=multi_label,
+    #                                classes_names=mlb.classes_, testing=True)
+    # testing_generator = AudioGenerator(x_test, y_test, 32, use_mfcc=True, multi_label=multi_label,
+    #                                    classes_names=mlb.classes_, testing=True)
+    #
+    # model = TrainMICModel(MICType.TFQ, generator, val_generator, log_dir_TFQ, model_dir_TFQ, mlb.classes_, model_path)(
+    #     epoch_num)
+    # TestMICModel(model, testing_generator, mlb.classes_, log_dir=log_dir_TFQ)()
+    #
+    # generator = AudioGenerator(x_train, y_train, 32, use_mfcc=True, multi_label=multi_label,
+    #                            classes_names=mlb.classes_, testing=False)
+    # val_generator = AudioGenerator(x_val, y_val, 32, use_mfcc=True, multi_label=multi_label,
+    #                                classes_names=mlb.classes_, testing=True)
+    # testing_generator = AudioGenerator(x_test, y_test, 32, use_mfcc=True, multi_label=multi_label,
+    #                                    classes_names=mlb.classes_, testing=True)
+    #
+    # model = TrainMICModel(MICType.NONE, generator, val_generator, log_dir_None, model_dir_None, mlb.classes_, model_path)(
+    #     epoch_num)
+    # TestMICModel(model, testing_generator, mlb.classes_, log_dir=log_dir_None)()
+    #
+    #
+    #
+    multi_label = True
+    generator = AudioGenerator(x_train, y_train, 32, use_mfcc=True, multi_label=multi_label,
+                               classes_names=mlb.classes_, testing=False)
+    val_generator = AudioGenerator(x_val, y_val, 32, use_mfcc=True, multi_label=multi_label,
+                                   classes_names=mlb.classes_, testing=True)
+    testing_generator = AudioGenerator(x_test, y_test, 32, use_mfcc=True, multi_label=multi_label,
+                                       classes_names=mlb.classes_, testing=True)
 
-        model.fit(generator,
-                  epochs=30,
-                  steps_per_epoch=len(generator),
-                  verbose=1,
-                  use_multiprocessing=True,
-                  workers=6,
-                  callbacks=[model_checkpoint_callback, tensorboard_callback])
-
-    instruments_transformed_test = mlb.transform(labels_named_test)
-    testing_generator = AudioGenerator(np.array(filenames_test), instruments_transformed_test, 1, use_mfcc=True)
-    test_metrics = model.evaluate(testing_generator, steps=len(testing_generator))
-    test_loss = test_metrics[0]
-    test_average_acc = test_metrics[-1]
-    test_accuracies = test_metrics[1:-1]
-    print(f"Test Loss: {test_loss}")
-    print(f"Test Average Accuracy: {test_average_acc}")
-    print(f"Test Accuracies: {test_accuracies}")
-
-    predict_model(model, testing_generator, instruments_transformed_test, mlb)
+    model = TrainConvModel(generator, val_generator, log_dir_Conv, model_dir_Conv, mlb.classes_, model_path)(epoch_num)
+    TestConvModel(model, testing_generator, mlb.classes_, log_dir=log_dir_Conv)()
 
 
 if __name__ == "__main__":
