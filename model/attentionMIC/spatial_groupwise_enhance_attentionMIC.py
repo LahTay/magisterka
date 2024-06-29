@@ -58,21 +58,22 @@ class SGELayer(Layer):
 
 def create_attentionMIC_SGE_model(input_shape, num_classes, num_groups):
     input_layer = Input(shape=input_shape)
-
-    x = Conv2D(filters=64, kernel_size=(1, 1), activation='relu')(input_layer)
+    x = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(input_layer)
     x = BatchNormalization()(x)
     x = SGELayer(num_groups)(x)
-    x = Conv2D(filters=64, kernel_size=(1, 1), activation='relu')(x)
+    x = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(x)
     x = BatchNormalization()(x)
     x = SGELayer(num_groups)(x)
-    x = Conv2D(filters=64, kernel_size=(1, 1), activation='relu')(x)
+    x = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(x)
     x = BatchNormalization()(x)
     x = SGELayer(num_groups)(x)
 
     x = AttentionLayer(filters=64)(x)
 
     x = GlobalAveragePooling2D()(x)
-    output_layer = Dense(num_classes, activation='softmax')(x)
+    x = Dense(128, activation='relu')(x)
+    x = Dense(64, activation='relu')(x)
+    output_layer = Dense(num_classes, activation='sigmoid')(x)
 
     model = Model(inputs=input_layer, outputs=output_layer)
     return model

@@ -6,14 +6,15 @@ class TimeFreqAttentionLayer(Layer):
     def __init__(self, filters, **kwargs):
         super(TimeFreqAttentionLayer, self).__init__(**kwargs)
         self.conv1 = Conv2D(filters=filters, kernel_size=(1, 1), padding='same', activation='relu')
-        self.conv2 = Conv2D(filters=filters, kernel_size=(1, 1), padding='same', activation='sigmoid')
-        self.conv3 = Conv2D(filters=filters, kernel_size=(1, 1), padding='same', activation='sigmoid')
+        self.conv2 = Conv2D(filters=filters, kernel_size=(1, 5), padding='same', activation='sigmoid')
+        self.conv3 = Conv2D(filters=filters, kernel_size=(5, 1), padding='same', activation='sigmoid')
 
     def call(self, inputs, **kwargs):
         feature_maps = self.conv1(inputs)
         attention_time = self.conv2(inputs)
         attention_freq = self.conv3(inputs)
-        attended = multiply([feature_maps, attention_time, attention_freq])
+        attended_time = multiply([feature_maps, attention_time])
+        attended = multiply([attended_time, attention_freq])
         return attended
 
     def get_config(self):
@@ -23,17 +24,19 @@ class TimeFreqAttentionLayer(Layer):
 def create_attentionMIC_TFQ_model(input_shape, num_classes):
     input_layer = Input(shape=input_shape)
 
-    x = Conv2D(filters=64, kernel_size=(1, 1), activation='relu')(input_layer)
+    x = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(input_layer)
     x = BatchNormalization()(x)
-    x = Conv2D(filters=64, kernel_size=(1, 1), activation='relu')(x)
+    x = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(x)
     x = BatchNormalization()(x)
-    x = Conv2D(filters=64, kernel_size=(1, 1), activation='relu')(x)
+    x = Conv2D(filters=64, kernel_size=(3, 3), activation='relu')(x)
     x = BatchNormalization()(x)
 
     x = TimeFreqAttentionLayer(filters=64)(x)
 
     x = GlobalAveragePooling2D()(x)
-    output_layer = Dense(num_classes, activation='softmax')(x)
+    x = Dense(128, activation='relu')(x)
+    x = Dense(64, activation='relu')(x)
+    output_layer = Dense(num_classes, activation='sigmoid')(x)
 
     model = Model(inputs=input_layer, outputs=output_layer)
     return model

@@ -14,7 +14,8 @@ import tensorflow as tf
 
 
 class TrainConvModel:
-    def __init__(self, generator, validation_generator, log_dir, checkpoint_dir, classes_names, load_model_path="", verbose=1):
+    def __init__(self, generator, validation_generator, log_dir, checkpoint_dir, classes_names, load_model_path="",
+                 verbose=1, class_weights=None):
         self.generator = generator
         self.val_generator = validation_generator
         self.log_dir = log_dir
@@ -24,6 +25,7 @@ class TrainConvModel:
         self.num_outputs = self.generator.get_label_num()
         self.classes_names = classes_names
         self.verbose = verbose
+        self.class_weights = class_weights
 
     def __call__(self, epochs, *args, **kwargs):
         self.train(epochs)
@@ -64,7 +66,8 @@ class TrainConvModel:
                        verbose=2,
                        callbacks=[model_checkpoint_callback, tensorboard_callback, csv_logger_callback],
                        validation_data=self.val_generator,
-                       validation_steps=len(self.val_generator))
+                       validation_steps=len(self.val_generator),
+                       class_weight=self.class_weights)
 
     def get_model(self):
         return self.model

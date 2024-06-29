@@ -1,11 +1,11 @@
 import os
 import datetime
 from enum import Enum
+
+import wandb
 from tensorflow.keras.models import load_model
 from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard
-from model.metrics.MultiLabelAccuracy import MultiLabelAccuracy
-from model.metrics.MultiLabelPrecision import MultiLabelPrecision
-from model.metrics.MultiLabelF1Score import MultiLabelF1Score
+from tensorflow.keras.backend import epsilon
 from model.custom_callbacks.CSVLogger import CSVLoggerCallback
 from model.metrics.F1Score import F1Score
 from model.metrics.HammingLoss import HammingLoss
@@ -14,11 +14,11 @@ from model.attentionMIC.spatial_groupwise_enhance_attentionMIC import create_att
 from model.attentionMIC.efficient_channel_attentionMIC import create_attentionMIC_ECA_model
 from model.attentionMIC.time_frequency_attentionMIC import create_attentionMIC_TFQ_model
 from model.attentionMIC.attentionMIC import create_attentionMIC_model
-
-
-from model.conv_model.conv_model import create_conv_model_from_paper
+from model.attentionMIC.no_attention import create_no_attentionMIC_model
 
 import tensorflow as tf
+
+from wandb.integration.keras import WandbMetricsLogger
 
 
 class MICType(Enum):
@@ -26,11 +26,12 @@ class MICType(Enum):
     ECA = 1
     SGE = 2
     TFQ = 3
+    NONE_NO_ATTENTION = 4
 
 
 class TrainMICModel:
     def __init__(self, MIC_type: MICType, generator, validation_generator, log_dir, checkpoint_dir, classes_names,
-                 load_model_path="", verbose=1):
+                 load_model_path="", verbose=1, class_weights=None, audio_bits=None, quantization_weights=None):
         self.MIC_type = MIC_type
         self.generator = generator
         self.val_generator = validation_generator
@@ -41,10 +42,21 @@ class TrainMICModel:
         self.num_outputs = self.generator.get_label_num()
         self.classes_names = classes_names
         self.verbose = verbose
+        self.class_weights = tf.constant([class_weights[i] for i in range(len(class_weights))], dtype=tf.float32)
 
     def __call__(self, epochs, *args, **kwargs):
         self.train(epochs)
         return self.get_model()
+
+    def _weighted_binary_crossentropy(self, y_true, y_pred):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        y_pred = tf.clip_by_value(y_pred, epsilon(), 1 - epsilon())
+        bce = tf.keras.backend.binary_crossentropy(y_true, y_pred)
+        weight_vector = y_true * self.class_weights + (1 - y_true) * (1 - self.class_weights)
+        weighted_bce = weight_vector * bce
+        print(tf.reduce_mean(weighted_bce))
+        return tf.reduce_mean(weighted_bce)
 
     def train(self, epochs=30):
 
@@ -54,17 +66,24 @@ class TrainMICModel:
                 case MICType.ECA:
                     self.model = create_attentionMIC_ECA_model(input_shape, self.num_outputs)
                 case MICType.SGE:
-                    num_groups = 1
-                    # TODO: NOT FINISHED
+                    """
+                    There's 64 filters so num_groups can be:
+                    1, 2, 4, 8, 16, 32, 64
+                    """
+                    num_groups = 8
                     self.model = create_attentionMIC_SGE_model(input_shape, self.num_outputs, num_groups)
                 case MICType.TFQ:
                     self.model = create_attentionMIC_TFQ_model(input_shape, self.num_outputs)
+                case MICType.NONE_NO_ATTENTION:
+                    self.model = create_no_attentionMIC_model(input_shape, self.num_outputs)
                 case _:
                     self.model = create_attentionMIC_model(input_shape, self.num_outputs)
 
-            metrics = [tf.keras.metrics.Precision(), tf.keras.metrics.Recall(), F1Score(), HammingLoss()]
+            metrics = [tf.keras.metrics.Precision(), tf.keras.metrics.Recall(), F1Score(), HammingLoss(),
+                       tf.keras.metrics.AUC(curve="ROC", name="auc_roc"),
+                       tf.keras.metrics.AUC(curve="PR", name="auc_pr")]
             self.model.compile(optimizer='adam',
-                               loss='binary_crossentropy',
+                               loss="binary_crossentropy",
                                metrics=metrics)
         if self.verbose:
             self.model.summary()
@@ -73,13 +92,15 @@ class TrainMICModel:
         tensorboard_callback = self._set_tensorboard_callback(histogram_freq=1, update_freq="epoch")
         csv_logger_callback = CSVLoggerCallback(self.log_dir)
 
+        wandb_callback = WandbMetricsLogger()
+
         self.model.fit(self.generator,
                        epochs=epochs,
                        steps_per_epoch=len(self.generator),
                        verbose=1,
                        use_multiprocessing=False,
                        workers=4,
-                       callbacks=[model_checkpoint_callback, tensorboard_callback, csv_logger_callback],
+                       callbacks=[model_checkpoint_callback, tensorboard_callback, csv_logger_callback, wandb_callback],
                        validation_data=self.val_generator,
                        validation_steps=len(self.val_generator))
 

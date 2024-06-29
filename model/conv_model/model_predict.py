@@ -40,7 +40,7 @@ def predict_model(model, testing_generator, true_labels, label_names, separate_l
     num_rows = int(np.ceil(num_classes / num_cols))
 
     # Setting up the figure, subplots
-    fig, axes = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(15, num_classes * 2))
+    fig, axes = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(num_classes * 2, 15))
     axes = axes.flatten()
 
     # Loop through all classes and plot the confusion matrix for each

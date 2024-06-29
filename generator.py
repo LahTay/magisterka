@@ -4,6 +4,7 @@ from tensorflow.keras.utils import Sequence
 import audiofile
 import librosa
 from tqdm import tqdm
+import speechpy
 """
 How the Generator class is supposed to work
 It's going to be used in the .fit function of keras.
@@ -36,7 +37,8 @@ on_epoch_end():
 
 class AudioGenerator(Sequence):
     def __init__(self, x_paths, y_values, batch_size=64, use_mfcc=False, n_fft=1024, hop_length=512, n_mfcc=40,
-                 multi_label=True, classes_names=None, testing=False, use_spectrogram=False, preprocess=True):
+                 multi_label=True, classes_names=None, testing=False, use_spectrogram=False, preprocess=True,
+                 normalize=True, train_mean=None, train_std=None, audio_bits=None):
         self.x = x_paths.flatten()  # Has to be ndarray
         self.y = y_values  # Has to be ndarray
         self.testing = testing
@@ -53,6 +55,10 @@ class AudioGenerator(Sequence):
         self.data_shape = self._return_data_shape()
         self.preprocessed_data = np.zeros((len(self.x), *self.data_shape))
         self.preprocess = preprocess
+        self.normalize = normalize
+        self.train_mean = train_mean
+        self.train_std = train_std
+        self.audio_bits = audio_bits
         if self.preprocess:
             self._preprocess_data()
         self._shuffle_indices()
@@ -86,6 +92,21 @@ class AudioGenerator(Sequence):
             else:
                 processed_data = audio_data
             self.preprocessed_data[i] = processed_data
+        if not self.normalize:
+            return
+
+        data_shape = self.preprocessed_data.shape
+        flattened = self.preprocessed_data.transpose(1, 0, 2).reshape(data_shape[1], -1)
+        if self.train_std is None or self.train_mean is None:
+            print("Calculating new means and stds")
+            self.train_mean = np.mean(flattened, axis=1, keepdims=True)
+            self.train_std = np.std(flattened, axis=1, keepdims=True)
+
+        normalized_features = (flattened - self.train_mean) / (self.train_std + 1e-8)
+        normalized_features = (normalized_features.reshape(data_shape[1], data_shape[0], data_shape[2]).
+                               transpose(1, 0, 2))
+
+        self.preprocessed_data = normalized_features
 
     def __len__(self):
         return self.len
@@ -127,7 +148,17 @@ class AudioGenerator(Sequence):
             np.random.shuffle(self.indices)
 
     def _read_audio(self, file_name):
-        audio_data, sr = audiofile.read(file_name)
+        if self.audio_bits is None:
+            audio_data, sr = audiofile.read(file_name)
+        else:
+            if self.audio_bits == 8:
+                audio_data, sr = audiofile.read(file_name, dtype='int8')
+            elif self.audio_bits == 16:
+                audio_data, sr = audiofile.read(file_name, dtype='int16')
+            elif self.audio_bits == 32:
+                audio_data, sr = audiofile.read(file_name, dtype='int32')
+            else:
+                raise (Exception("Wrong audio bits amount"))
         return audio_data, sr
 
     def _compute_mfcc(self, data, sr, max_frames):
